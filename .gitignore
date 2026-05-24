@@ -1,0 +1,4 @@
+.env
+__pycache__/
+travel_plans/
+AI_TravelPlanner/
