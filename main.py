@@ -1,19 +1,10 @@
-'''
-# pip install langgraph langchain langchain-openai langchain-groq langchain-community langchain-tavily psycopg[binary] psycopg_pool python-dotenv tavily-python pip install requests streamlit
-
-# install PostgresSql and create database
-CREATE DATABASE langgraph_memory;  ( or open pgadmin4 and create database there )
-'''
-# LangGraph Multi-Agent Travel Booking System with Long-Term Memory
-
-# main.py
-
 import os
 from typing import TypedDict, Annotated
 from pydantic import BaseModel, Field
 import operator
 
-
+import psycopg
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import (
     AnyMessage,
@@ -23,18 +14,16 @@ from langchain_core.messages import (
 )
 
 from langchain_groq import ChatGroq
-
 from tavily_tool import tavily_search
 from flight_tool import search_flights
 from dotenv import load_dotenv
 load_dotenv()
 
-
-# LLM
 llm = ChatGroq(
     model="llama-3.3-70b-versatile"
 )
 
+#------------------------
 # Schema
 
 # For flight agent
@@ -58,6 +47,7 @@ class HotelSearchSchema(BaseModel):
         description="Specific hotel preferences (e.g., 'luxury', 'budget', 'under ₹50,000', 'near beach'). If none mentioned, output 'best rated'."
     )
 
+#-----------------------------
 # State
 class TravelState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
@@ -67,14 +57,23 @@ class TravelState(TypedDict):
     itinerary: str
     llm_calls: int
 
+#---------------------------------
+# Postgres saver
+
+DB_URI = os.getenv("DATABASE_URL")
+db_connection = psycopg.connect(DB_URI, autocommit=True)
+checkpointer = PostgresSaver(db_connection)
+checkpointer.setup()
+
+#-------------------------------
+# Agents(Nodes)
+
 # Flight Agent
 def flight_agent(state: TravelState):
     user_query = state["user_query"]
-    
-    # 1. Bind the Pydantic schema to the LLM
+
     structured_llm = llm.with_structured_output(FlightRoutingSchema)
-    
-    # 2. The Enriched Prompt (Business Logic & Reasoning)
+
     routing_prompt = """
     You are an expert travel routing AI. Your job is to analyze the user's travel request and determine the exact departure and arrival airports, along with any mentioned dates.
 
@@ -84,19 +83,16 @@ def flight_agent(state: TravelState):
     3. DATES: Extract any mentioned dates, durations, or months. If none are mentioned, output 'Dates not specified'.
     """
     
-    # Safe fallbacks
     dep_iata = "DEL"
     arr_iata = "NRT"
     travel_dates = "Dates not specified"
     
     try:
-        # 3. Invoke the LLM with BOTH the enriched reasoning prompt and the strict Pydantic schema
         result = structured_llm.invoke([
             SystemMessage(content=routing_prompt),
             HumanMessage(content=f"User Query: {user_query}")
         ])
-        
-        # Access the structured Pydantic fields directly
+
         dep_iata = result.dep_iata.strip().upper()
         arr_iata = result.arr_iata.strip().upper()
         travel_dates = result.travel_dates.strip()
@@ -104,13 +100,21 @@ def flight_agent(state: TravelState):
     except Exception as e:
         print(f"Error parsing routing schema, applying fallbacks: {e}")
 
-    # 4. Call the flight tool safely
-    flight_data = search_flights(dep_iata, arr_iata)
     
+    outbound_flights = search_flights(dep_iata, arr_iata)
+    return_flights = search_flights(arr_iata, dep_iata)
+    
+    combined_flight_data = f"""
+    --- 🛫 OUTBOUND FLIGHTS: {dep_iata} ➔ {arr_iata} ---
+    {outbound_flights}
+
+    --- 🛬 RETURN FLIGHTS: {arr_iata} ➔ {dep_iata} ---
+    {return_flights}
+    """
     return {
-        "flight_results": f"📅 Travel Dates: {travel_dates}\n✈️ Route Resolved: {dep_iata} ➔ {arr_iata}\n\n{flight_data}",
+        "flight_results": f"📅 Travel Dates: {travel_dates}\n\n{combined_flight_data}",
         "messages": [
-            AIMessage(content=f"Flight results fetched for route {dep_iata} to {arr_iata}. Dates: {travel_dates}")
+            AIMessage(content=f"Round-trip flights successfully fetched for route {dep_iata} ⇄ {arr_iata}. Dates: {travel_dates}")
         ],
         "llm_calls": state.get("llm_calls", 0) + 1 
     }
@@ -119,10 +123,8 @@ def flight_agent(state: TravelState):
 def hotel_agent(state: TravelState):
     user_query = state["user_query"]
     
-    # 1. Bind the Pydantic schema to the LLM
     structured_llm = llm.with_structured_output(HotelSearchSchema)
     
-    # 2. The Enriched Prompt (Business Logic & Reasoning)
     hotel_prompt = """
     You are an expert travel accommodation AI. Analyze the user's request and extract the destination and any specific hotel preferences.
 
@@ -131,28 +133,22 @@ def hotel_agent(state: TravelState):
     2. PREFERENCES: Extract any keywords related to the stay. Look for budget constraints (e.g., "cheap", "under 2 lakhs"), star ratings ("5-star"), or styles ("romantic", "family-friendly"). If none are mentioned, output 'best rated'.
     """
     
-    # Safe fallbacks
     destination = "Delhi"
     preferences = "best rated"
     
     try:
-        # 3. Invoke the LLM with BOTH reasoning rules and strict schema
         result = structured_llm.invoke([
             SystemMessage(content=hotel_prompt),
             HumanMessage(content=f"User Query: {user_query}")
         ])
         
-        # Access the structured Pydantic fields
         destination = result.destination.strip()
         preferences = result.preferences.strip()
         
     except Exception as e:
         print(f"Error parsing hotel schema, applying fallbacks: {e}")
 
-    # 4. Build a highly targeted search string for Tavily
     clean_search_query = f"Top {preferences} hotels to stay in {destination} with prices and recent reviews"
-    
-    # 5. Call the Tavily tool
     hotel_results = tavily_search(clean_search_query)
 
     return {
@@ -325,4 +321,54 @@ graph.add_edge("hotel_agent", "itinerary_agent")
 graph.add_edge("itinerary_agent", "final_agent")
 graph.add_edge("final_agent", END)
 
-app = graph.compile()
+app = graph.compile(checkpointer=checkpointer)
+
+#----------------------------------
+# Helper functions
+
+def init_chat_sessions_table():
+    """Initializes the chat_sessions table in Supabase."""
+    if not DB_URI:
+        return
+    try:
+        with psycopg.connect(DB_URI, autocommit=True) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    thread_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+    except Exception as e:
+        print(f"Error initializing chat_sessions table: {e}")
+
+init_chat_sessions_table()
+
+def get_all_chat_sessions():
+    """Fetches all past chat threads from Supabase."""
+    if not DB_URI:
+        return []
+    try:
+        with psycopg.connect(DB_URI) as conn:
+            cur = conn.execute("SELECT thread_id, title FROM chat_sessions ORDER BY created_at DESC")
+            return cur.fetchall()
+    except Exception as e:
+        print(f"Error fetching sessions: {e}")
+        return []
+
+def generate_and_save_title(thread_id: str, user_query: str):
+    """Uses the LLM to generate a 3-5 word title and saves it to Supabase."""
+    if not DB_URI:
+        return
+    try:
+        with psycopg.connect(DB_URI, autocommit=True) as conn:
+            cur = conn.execute("SELECT 1 FROM chat_sessions WHERE thread_id = %s", (thread_id,))
+            if not cur.fetchone():
+                title_prompt = f"Summarize this travel request into a short, engaging title of exactly 3 to 5 words. Do not use quotes, punctuation, or prefixes. Request: '{user_query}'"
+                title_response = llm.invoke([HumanMessage(content=title_prompt)])
+                generated_title = title_response.content.strip().replace('"', '')
+                
+                conn.execute("INSERT INTO chat_sessions (thread_id, title) VALUES (%s, %s)", 
+                             (thread_id, generated_title))
+    except Exception as e:
+        print(f"Failed to generate title: {e}")
