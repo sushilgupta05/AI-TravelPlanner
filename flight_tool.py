@@ -1,14 +1,3 @@
-
-# Example free API usage
-# - AviationStack
-
-
-# create api key
-# https://aviationstack.com/ 
-# pip install requests
-
-
-    
 import os
 import requests
 from dotenv import load_dotenv
@@ -23,7 +12,6 @@ def search_flights(dep_iata: str, arr_iata: str):
     """
     url = "http://api.aviationstack.com/v1/flights"
 
-    # 1. Update params to map both departure and arrival airport codes
     params = {
         "access_key": API_KEY,
         "limit": 5,
@@ -39,7 +27,6 @@ def search_flights(dep_iata: str, arr_iata: str):
 
     flights = []
 
-    # 2. Fixed the "if data in data" logic bug and verified it's a list
     if "data" in data and isinstance(data["data"], list):
         for flight in data["data"][:5]:
             airline = flight.get("airline", {}).get("name", "Unknown")
@@ -51,7 +38,6 @@ def search_flights(dep_iata: str, arr_iata: str):
                 f"Airline: {airline}\nDeparture: {departure}\nArrival: {arrival}\nStatus: {status}\n"
             )
 
-    # 3. Graceful fallback text if the API returns an empty flight array
     if not flights:
         return f"No live scheduled flights found right now for the route: {dep_iata} ➔ {arr_iata}."
 
