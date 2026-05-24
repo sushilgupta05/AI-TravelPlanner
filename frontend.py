@@ -1,14 +1,27 @@
 import os
+import uuid
 import streamlit as st
 from datetime import datetime
-from langchain_core.messages import HumanMessage
-from main import app
+from langchain_core.messages import HumanMessage, AIMessage
+from main import app, get_all_chat_sessions, generate_and_save_title
 
 st.set_page_config(
     page_title="AI Travel Booking System",
     page_icon="✈️",
     layout="wide"
 )
+
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+
+def start_new_chat():
+    """Callback to generate a fresh Thread ID for a new conversation."""
+    st.session_state.thread_id = str(uuid.uuid4())
+
+def load_chat(tid):
+    """Callback to switch the UI to an older chat thread."""
+    st.session_state.thread_id = tid
+
 
 st.markdown("""
 <style>
@@ -300,23 +313,32 @@ div[data-testid="stDownloadButton"] > button {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# Sidebar
 with st.sidebar:
     st.markdown("<div class='sidebar-title'>🌍 AI Travel Planner</div>", unsafe_allow_html=True)
+    st.button("➕ New Travel Plan", on_click=start_new_chat)
     st.markdown("---")
 
-    thread_id = st.text_input("👤 User ID", value="sushil_user",
-                              help="Your session ID — keeps travel history across queries")
+    st.markdown("<div class='sidebar-title'>🕰️ Previous Trips</div>", unsafe_allow_html=True)
+    
+    # Dynamically fetch sessions using the backend function
+    sessions = get_all_chat_sessions()
+    
+    if not sessions:
+        st.markdown("<span style='color:#5a7a96; font-size:0.8rem;'>No previous trips found.</span>", unsafe_allow_html=True)
+    else:
+        for tid, title in sessions:
+            # Highlight the currently active chat
+            prefix = "🟢 " if tid == st.session_state.thread_id else "💬 "
+            st.button(f"{prefix}{title}", key=f"btn_{tid}", on_click=load_chat, args=(tid,))
 
+    st.markdown("---")
     st.markdown("<div class='sidebar-title'>Powered by</div>", unsafe_allow_html=True)
-    for tech in ["🔗 LangGraph", "🧠 Groq · LLaMA 3.3 70B", "🐘 PostgreSQL", "🔍 Tavily Search", "✈️ AviationStack"]:
+    for tech in ["🔗 LangGraph", "🧠 Groq · LLaMA 3.3", "🐘 PostgreSQL", "🔍 Tavily Search", "✈️ AviationStack"]:
         st.markdown(f"<div class='sidebar-chip'>{tech}</div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='sidebar-title'>Agent Pipeline</div>", unsafe_allow_html=True)
-    for step in ["① Flight Agent", "② Hotel Agent", "③ Itinerary Agent", "④ Final Agent"]:
-        st.markdown(f"<div class='sidebar-chip'>{step}</div>", unsafe_allow_html=True)
 
-# ── Hero ──────────────────────────────────────────────────────────────────────
+# Hero
 st.markdown("""
 <div class="hero-wrapper">
     <img class="hero-bg"
@@ -330,7 +352,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Destination image strip ───────────────────────────────────────────────────
+# Destination image
 DESTINATIONS = [
     ("🇯🇵 Tokyo",     "https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=300&q=70"),
     ("🇫🇷 Paris",     "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=300&q=70"),
@@ -352,7 +374,30 @@ for col, (name, img_url) in zip(cols, DESTINATIONS):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Input ─────────────────────────────────────────────────────────────────────
+
+# Chat history
+st.markdown("<div class='sec-head'><span>🗺️ Active Trip Plan</span></div>", unsafe_allow_html=True)
+
+config = {"configurable": {"thread_id": st.session_state.thread_id}}
+
+try:
+    state = app.get_state(config)
+    if state and state.values and "messages" in state.values:
+        history_messages = state.values["messages"]
+        if history_messages:
+            for msg in history_messages:
+                if isinstance(msg, HumanMessage):
+                    with st.chat_message("user"):
+                        st.write(msg.content)
+                elif isinstance(msg, AIMessage):
+                    if len(msg.content) > 150: 
+                        with st.chat_message("assistant"):
+                            st.markdown(msg.content)
+except Exception as e:
+    pass
+
+
+# input
 st.markdown("<div class='input-label'>🗺️ Describe your trip</div>", unsafe_allow_html=True)
 
 QUICK = ["7-day Japan under ₹2L", "Paris trip for 5 days", "Dubai weekend trip", "Bali backpacking 10 days"]
@@ -373,7 +418,7 @@ user_query = st.text_area(
 
 generate = st.button("🚀  Generate My Travel Plan", use_container_width=True)
 
-# ── Agent pipeline ────────────────────────────────────────────────────────────
+# Agent Pipeline
 AGENT_META = {
     "flight_agent":    ("✈️", "Flight Agent"),
     "hotel_agent":     ("🏨", "Hotel Agent"),
@@ -385,13 +430,10 @@ if generate:
     if not user_query.strip():
         st.warning("Please describe your trip first.")
     else:
-        config = {"configurable": {"thread_id": thread_id}}
-        collected = {"flight_results": "", "hotel_results": "",
-                     "itinerary": "", "final_response": "", "llm_calls": 0}
-
+        generate_and_save_title(st.session_state.thread_id, user_query)
+        collected = {"flight_results": "", "hotel_results": "", "itinerary": "", "final_response": "", "llm_calls": 0}
         st.markdown("---")
-        st.markdown("<div class='sec-head'><span>🤖 Agent Pipeline — Live</span></div>",
-                    unsafe_allow_html=True)
+        st.markdown("<div class='sec-head'><span>🤖 Agent Pipeline — Live</span></div>", unsafe_allow_html=True)
 
         for chunk in app.stream(
             {
@@ -457,7 +499,7 @@ if generate:
         file_content = f"""# Travel Plan
 **Query:** {user_query}
 **Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-**User ID:** {thread_id}
+**Thread ID:** {st.session_state.thread_id}
 
 ---
 
@@ -493,3 +535,4 @@ if generate:
         with info_col:
             st.markdown(f"<div class='save-bar'>📁 Auto-saved → <code>travel_plans/{filename}</code></div>",
                         unsafe_allow_html=True)
+        st.rerun()
