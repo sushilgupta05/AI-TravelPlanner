@@ -357,14 +357,14 @@ def get_all_chat_sessions():
         return []
 
 def generate_and_save_title(thread_id: str, user_query: str):
-    """Uses the LLM to generate a 3-5 word title and saves it to Supabase."""
+    """Uses the LLM to generate a 4-8 word title and saves it to Supabase."""
     if not DB_URI:
         return
     try:
         with psycopg.connect(DB_URI, autocommit=True) as conn:
             cur = conn.execute("SELECT 1 FROM chat_sessions WHERE thread_id = %s", (thread_id,))
             if not cur.fetchone():
-                title_prompt = f"Summarize this travel request into a short, engaging title of exactly 3 to 5 words. Do not use quotes, punctuation, or prefixes. Request: '{user_query}'"
+                title_prompt = f"Summarize this travel request into a short, engaging title of exactly 4 to 8 words. Request: '{user_query}'"
                 title_response = llm.invoke([HumanMessage(content=title_prompt)])
                 generated_title = title_response.content.strip().replace('"', '')
                 

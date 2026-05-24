@@ -8,7 +8,8 @@ from main import app, get_all_chat_sessions, generate_and_save_title
 st.set_page_config(
     page_title="AI Travel Booking System",
     page_icon="✈️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 if "thread_id" not in st.session_state:
@@ -234,7 +235,7 @@ section[data-testid="stSidebar"] {
 .sidebar-title { color: #e0edf8; font-size: 1rem; font-weight: 600; margin: 1rem 0 0.5rem; }
 
 /* Hide branding */
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer { visibility: hidden; }
 
 /* Textarea */
 .stTextArea textarea {
@@ -329,7 +330,7 @@ with st.sidebar:
     else:
         for tid, title in sessions:
             # Highlight the currently active chat
-            prefix = "🟢 " if tid == st.session_state.thread_id else "💬 "
+            prefix = "🟢 " if tid == st.session_state.thread_id else ""
             st.button(f"{prefix}{title}", key=f"btn_{tid}", on_click=load_chat, args=(tid,))
 
     st.markdown("---")
@@ -380,11 +381,15 @@ st.markdown("<div class='sec-head'><span>🗺️ Active Trip Plan</span></div>",
 
 config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
+has_history = False
+
 try:
     state = app.get_state(config)
     if state and state.values and "messages" in state.values:
         history_messages = state.values["messages"]
         if history_messages:
+            # 2. FLIP THE SWITCH: We found history!
+            has_history = True 
             for msg in history_messages:
                 if isinstance(msg, HumanMessage):
                     with st.chat_message("user"):
@@ -398,25 +403,44 @@ except Exception as e:
 
 
 # input
-st.markdown("<div class='input-label'>🗺️ Describe your trip</div>", unsafe_allow_html=True)
+# --- THE UI FORK ---
 
-QUICK = ["7-day Japan under ₹2L", "Paris trip for 5 days", "Dubai weekend trip", "Bali backpacking 10 days"]
-qcols = st.columns(len(QUICK))
-quick_fill = ""
-for qc, label in zip(qcols, QUICK):
-    with qc:
-        if st.button(label, key=f"q_{label}"):
-            quick_fill = label
+if not has_history:
+    # IF NO HISTORY: Show the big form generator
+    st.markdown("<div class='input-label'>🗺️ Describe your trip</div>", unsafe_allow_html=True)
 
-user_query = st.text_area(
-    "",
-    value=quick_fill,
-    placeholder="e.g. Plan a complete 7-day Japan trip including flights, hotels and sightseeing under ₹2 lakhs",
-    height=100,
-    label_visibility="collapsed",
-)
+    QUICK = ["7-day Japan under ₹2L", "Paris trip for 5 days", "Dubai weekend trip", "Bali backpacking 10 days"]
+    qcols = st.columns(len(QUICK))
+    quick_fill = ""
+    for qc, label in zip(qcols, QUICK):
+        with qc:
+            if st.button(label, key=f"q_{label}"):
+                quick_fill = label
 
-generate = st.button("🚀  Generate My Travel Plan", use_container_width=True)
+    user_query = st.text_area(
+        "",
+        value=quick_fill,
+        placeholder="e.g. Plan a complete 7-day Japan trip including flights, hotels and sightseeing under ₹2 lakhs",
+        height=100,
+        label_visibility="collapsed",
+    )
+
+    generate = st.button("🚀  Generate My Travel Plan", use_container_width=True)
+
+else:
+    # IF HISTORY EXISTS: Hide the generator, show the chat interface
+    st.markdown("<br>", unsafe_allow_html=True)
+    follow_up_query = st.chat_input("Chat with your AI Concierge about this trip...")
+    
+    # We will hook this up to LangGraph in the next step!
+    if follow_up_query:
+        with st.chat_message("user"):
+            st.write(follow_up_query)
+        with st.chat_message("assistant"):
+            st.write("*(Concierge Agent backend connection coming next!)*")
+            
+    # Dummy variable so Python doesn't crash on the code below
+    generate = False
 
 # Agent Pipeline
 AGENT_META = {
