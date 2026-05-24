@@ -8,3 +8,5 @@ psycopg[binary]
 tavily-python
 requests
 python-dotenv
+markdown
+xhtml2pdf

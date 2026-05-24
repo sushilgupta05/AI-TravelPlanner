@@ -1,7 +1,10 @@
 import os
 import uuid
+import io
 import streamlit as st
 from datetime import datetime
+import markdown
+from xhtml2pdf import pisa
 from langchain_core.messages import HumanMessage, AIMessage
 from main import app, get_all_chat_sessions, generate_and_save_title
 
@@ -493,7 +496,7 @@ if generate:
                         msgs = state_update.get("messages", [])
                         text = msgs[-1].content if msgs else ""
                         collected["final_response"] = text
-                        st.markdown(text or "_No final response._")
+                        st.markdown("✅ Final travel plan compiled successfully.")
 
                     collected["llm_calls"] = state_update.get("llm_calls", collected["llm_calls"])
 
@@ -513,12 +516,11 @@ if generate:
             st.markdown(f"<div class='final-card'>{collected['final_response']}</div>",
                         unsafe_allow_html=True)
 
-        # Save
+        # --- PDF GENERATION & DOWNLOAD ---
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"travel_plan_{timestamp}.md"
-        save_dir = os.path.join(os.path.dirname(__file__), "travel_plans")
-        os.makedirs(save_dir, exist_ok=True)
+        pdf_filename = f"travel_plan_{timestamp}.pdf"
 
+        # 1. Construct the document text (THIS WAS THE MISSING VARIABLE!)
         file_content = f"""# Travel Plan
 **Query:** {user_query}
 **Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -527,35 +529,67 @@ if generate:
 ---
 
 ## ✈️ Flight Information
-{collected['flight_results'] or 'N/A'}
+{collected.get('flight_results', 'N/A')}
 
 ---
 
 ## 🏨 Hotel Information
-{collected['hotel_results'] or 'N/A'}
+{collected.get('hotel_results', 'N/A')}
 
 ---
 
 ## 🗓️ Itinerary
-{collected['itinerary'] or 'N/A'}
+{collected.get('itinerary', 'N/A')}
 
 ---
 
 ## 🧠 Final Travel Plan
-{collected['final_response'] or 'N/A'}
+{collected.get('final_response', 'N/A')}
 
 ---
-*LLM Calls: {collected['llm_calls']}*
+*LLM Calls: {collected.get('llm_calls', 0)}*
 """
-        with open(os.path.join(save_dir, filename), "w", encoding="utf-8") as f:
-            f.write(file_content)
 
+        # 2. Convert the raw Markdown into HTML (including tables)
+        html_body = markdown.markdown(file_content, extensions=['tables'])
+        
+        # 3. Wrap it in a CSS template for a clean, professional PDF layout
+        pdf_html = f"""
+        <html>
+        <head>
+            <style>
+                @page {{ margin: 2cm; }}
+                body {{ font-family: Helvetica, Arial, sans-serif; font-size: 12px; color: #222; line-height: 1.6; }}
+                h1 {{ color: #0a3d75; border-bottom: 2px solid #0a3d75; padding-bottom: 5px; }}
+                h2 {{ color: #1a6bbf; margin-top: 20px; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; }}
+                th, td {{ border: 1px solid #dddddd; padding: 10px; text-align: left; }}
+                th {{ background-color: #f4f6f9; font-weight: bold; color: #0a3d75; }}
+                li {{ margin-bottom: 5px; }}
+            </style>
+        </head>
+        <body>
+            {html_body}
+        </body>
+        </html>
+        """
+        
+        # 4. Generate the PDF entirely in memory
+        pdf_buf = io.BytesIO()
+        pisa.CreatePDF(io.BytesIO(pdf_html.encode('utf-8')), dest=pdf_buf)
+        pdf_bytes = pdf_buf.getvalue()
+
+        # 5. Render the Streamlit Download Button
         dl_col, info_col = st.columns([1, 3])
         with dl_col:
-            st.download_button("⬇️ Download Plan", data=file_content,
-                               file_name=filename, mime="text/markdown",
-                               use_container_width=True)
+            st.download_button(
+                label="⬇️ Download PDF", 
+                data=pdf_bytes,
+                file_name=pdf_filename, 
+                mime="application/pdf",
+                use_container_width=True
+            )
         with info_col:
-            st.markdown(f"<div class='save-bar'>📁 Auto-saved → <code>travel_plans/{filename}</code></div>",
-                        unsafe_allow_html=True)
-        st.rerun()
+            st.markdown(f"<div class='save-bar'>📄 Ready to download as PDF</div>", unsafe_allow_html=True)
+            
+        # (st.rerun() has been safely removed from here so your button stays visible!)
