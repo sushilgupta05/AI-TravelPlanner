@@ -338,7 +338,6 @@ with st.sidebar:
     for tech in ["🔗 LangGraph", "🧠 Groq · LLaMA 3.3", "🐘 PostgreSQL", "🔍 Tavily Search", "✈️ AviationStack"]:
         st.markdown(f"<div class='sidebar-chip'>{tech}</div>", unsafe_allow_html=True)
 
-
 # Hero
 st.markdown("""
 <div class="hero-wrapper">

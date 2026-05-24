@@ -372,3 +372,4 @@ def generate_and_save_title(thread_id: str, user_query: str):
                              (thread_id, generated_title))
     except Exception as e:
         print(f"Failed to generate title: {e}")
+        
