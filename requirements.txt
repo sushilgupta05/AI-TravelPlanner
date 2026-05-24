@@ -3,6 +3,8 @@ langgraph
 langchain-core
 langchain-groq
 pydantic
+langgraph-checkpoint-postgres
+psycopg[binary]
 tavily-python
 requests
 python-dotenv
